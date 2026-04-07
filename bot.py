@@ -26,7 +26,7 @@ def run_web():
     HTTPServer(("0.0.0.0", 10000), Handler).serve_forever()
 
 def save_to_notion(title, body=""):
-    for key in ["الاسم","المهمة","العنوان","Name","title"]:
+    for key in ["Name", "title"]:
         try:
             notion.pages.create(
                 parent={"database_id": NOTION_DATABASE_ID},
@@ -34,46 +34,52 @@ def save_to_notion(title, body=""):
                 children=[{"object":"block","type":"paragraph","paragraph":{"rich_text":[{"text":{"content":body}}]}}] if body else []
             )
             return True
-        except: continue
+        except:
+            continue
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحباً! 👋\n🎙️ أرسل رسالة صوتية → أحفظها في Notion\n📝 أرسل نصاً → أحفظه في Notion")
+    await update.message.reply_text("مرحبا! ارسل رسالة صوتية او نصية وساحفظها في Notion")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎙️ جاري التفريغ...")
+    await update.message.reply_text("جاري التفريغ...")
     try:
         voice = update.message.voice or update.message.audio
         file  = await context.bot.get_file(voice.file_id)
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
             await file.download_to_drive(tmp.name)
-        with open(tmp.name, "rb") as f:
-            t = groq_client.audio.transcriptions.create(file=("audio.ogg",f,"audio/ogg"),model="whisper-large-v3",language="ar")
+            tmp_path = tmp.name
+        with open(tmp_path, "rb") as f:
+            t = groq_client.audio.transcriptions.create(
+                file=("audio.ogg", f, "audio/ogg"),
+                model="whisper-large-v3",
+                language="ar"
+            )
         text = t.text.strip()
         if not text:
-            await update.message.reply_text("⚠️ لم أتمكن من التفريغ")
+            await update.message.reply_text("لم اتمكن من التفريغ، حاول مرة اخرى")
             return
         if save_to_notion(text[:100], text):
-            await update.message.reply_text(f"✅ تم الحفظ!\n\n📝 {text}")
+            await update.message.reply_text("تم الحفظ في Notion!\n\n" + text)
         else:
-            await update.message.reply_text(f"⚠️ تم التفريغ لكن فشل الحفظ:\n{text}")
+            await update.message.reply_text("تم التفريغ لكن فشل الحفظ:\n" + text)
     except Exception as e:
-        await update.message.reply_text(f"❌ خطأ: {e}")
+        await update.message.reply_text("خطا: " + str(e))
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    if save_to_notion(text[:100], text if len(text)>100 else ""):
-        await update.message.reply_text("✅ تم الحفظ في Notion!")
+    if save_to_notion(text[:100], text if len(text) > 100 else ""):
+        await update.message.reply_text("تم الحفظ في Notion!")
     else:
-        await update.message.reply_text("❌ فشل الحفظ")
+        await update.message.reply_text("فشل الحفظ")
 
 def main():
     threading.Thread(target=run_web, daemon=True).start()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.VOICE|filters.AUDIO, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT&~filters.COMMAND, handle_text))
-    print("البوت يعمل 🚀")
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    print("Bot is running")
     app.run_polling()
 
 if __name__ == "__main__":
