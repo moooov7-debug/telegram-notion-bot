@@ -46,41 +46,24 @@ def analyze_text(text):
     return json.loads(response.choices[0].message.content.strip())
 
 def save_to_notion(data):
-    props = {}
-    for key in ["Name", "title"]:
-        try:
-            props[key] = {"title": [{"text": {"content": data["task"][:200]}}]}
-            break
-        except:
-            continue
+    props = {
+        "اسم المهمة": {"title": [{"text": {"content": data["task"][:200]}}]}
+    }
     if data.get("due_date"):
-        for key in ["تاريخ الاستحقاق", "Due Date"]:
-            try:
-                props[key] = {"date": {"start": data["due_date"]}}
-                break
-            except:
-                continue
+        props["تاريخ الاستحقاق"] = {"date": {"start": data["due_date"]}}
     if data.get("priority"):
-        for key in ["الأولوية", "Priority"]:
-            try:
-                props[key] = {"select": {"name": data["priority"]}}
-                break
-            except:
-                continue
-    children = []
+        props["الأولوية"] = {"select": {"name": data["priority"]}}
     if data.get("notes"):
-        children = [{"object":"block","type":"paragraph","paragraph":{"rich_text":[{"text":{"content":data["notes"]}}]}}]
+        props["ملاحظات"] = {"rich_text": [{"text": {"content": data["notes"]}}]}
     try:
-        notion.pages.create(parent={"database_id": NOTION_DATABASE_ID}, properties=props, children=children)
+        notion.pages.create(
+            parent={"database_id": NOTION_DATABASE_ID},
+            properties=props
+        )
         return True
-    except:
-        for key in ["Name", "title"]:
-            try:
-                notion.pages.create(parent={"database_id": NOTION_DATABASE_ID}, properties={key: {"title": [{"text": {"content": data["task"][:200]}}]}}, children=children)
-                return True
-            except:
-                continue
-    return False
+    except Exception as e:
+        logging.error(str(e))
+        return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("مرحبا! ارسل رسالة صوتية او نصية وساحفظها في Notion")
