@@ -34,7 +34,7 @@ def analyze_text(text):
 {{
   "task": "اسم المهمة بشكل مختصر وواضح",
   "due_date": "تاريخ التسليم بصيغة YYYY-MM-DD او null. غدا = {tomorrow}",
-  "priority": "عالية او متوسطة او منخفضة او null",
+  "priority": "عاجل او عالية او متوسطة او منخفضة او null",
   "notes": "اي تفاصيل اضافية او null"
 }}
 النص: {text}"""
@@ -67,7 +67,7 @@ def save_to_notion(data):
         return True
     except Exception as e:
         logging.error(str(e))
-        return False
+        raise e
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("مرحبا! ارسل رسالة صوتية او نصية وساحفظها في Notion")
