@@ -1,15 +1,17 @@
-import os, logging, tempfile, threading, json
+import os, logging, tempfile, threading, json, time
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 from groq import Groq
 from notion_client import Client
+import httpx
 
 TELEGRAM_TOKEN     = os.environ["TELEGRAM_TOKEN"]
 GROQ_API_KEY       = os.environ["GROQ_API_KEY"]
 NOTION_TOKEN       = os.environ["NOTION_TOKEN"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+RENDER_URL         = os.environ.get("RENDER_URL", "https://telegram-notion-bot-2.onrender.com")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 notion      = Client(auth=NOTION_TOKEN)
@@ -25,6 +27,15 @@ class Handler(BaseHTTPRequestHandler):
 
 def run_web():
     HTTPServer(("0.0.0.0", 10000), Handler).serve_forever()
+
+def keep_alive():
+    while True:
+        time.sleep(14 * 60)
+        try:
+            httpx.get(RENDER_URL, timeout=10)
+            logging.info("Ping sent")
+        except:
+            pass
 
 def analyze_text(text):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -70,7 +81,66 @@ def save_to_notion(data):
         raise e
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحبا! ارسل رسالة صوتية او نصية وساحفظها في Notion")
+    await update.message.reply_text(
+        "مرحبا! الاوامر المتاحة:\n\n"
+        "ارسل رسالة صوتية او نصية لحفظ مهمة\n"
+        "/list - عرض اخر 5 مهام\n"
+        "/done - تعليم مهمة كمنجزة"
+    )
+
+async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        results = notion.databases.query(
+            database_id=NOTION_DATABASE_ID,
+            sorts=[{"timestamp": "created_time", "direction": "descending"}],
+            page_size=5
+        )
+        pages = results.get("results", [])
+        if not pages:
+            await update.message.reply_text("لا توجد مهام بعد!")
+            return
+
+        reply = "اخر 5 مهام:\n\n"
+        for i, page in enumerate(pages, 1):
+            props = page["properties"]
+            title = props["اسم المهمة"]["title"]
+            name = title[0]["text"]["content"] if title else "بدون اسم"
+            done = props.get("منجزة؟", {}).get("checkbox", False)
+            status = "✅" if done else "⬜"
+            due = props.get("تاريخ الاستحقاق", {}).get("date")
+            due_str = f" | {due['start']}" if due else ""
+            reply += f"{i}. {status} {name}{due_str}\n"
+
+        await update.message.reply_text(reply)
+    except Exception as e:
+        await update.message.reply_text("خطا: " + str(e))
+
+async def done_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        results = notion.databases.query(
+            database_id=NOTION_DATABASE_ID,
+            filter={"property": "منجزة؟", "checkbox": {"equals": False}},
+            sorts=[{"timestamp": "created_time", "direction": "descending"}],
+            page_size=5
+        )
+        pages = results.get("results", [])
+        if not pages:
+            await update.message.reply_text("لا توجد مهام غير منجزة!")
+            return
+
+        reply = "اختر رقم المهمة لتعليمها منجزة:\n\n"
+        page_ids = []
+        for i, page in enumerate(pages, 1):
+            props = page["properties"]
+            title = props["اسم المهمة"]["title"]
+            name = title[0]["text"]["content"] if title else "بدون اسم"
+            reply += f"{i}. {name}\n"
+            page_ids.append(page["id"])
+
+        context.user_data["pending_done"] = page_ids
+        await update.message.reply_text(reply + "\nارسل الرقم:")
+    except Exception as e:
+        await update.message.reply_text("خطا: " + str(e))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("جاري التفريغ والتحليل...")
@@ -98,6 +168,24 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+
+    # Check if user is selecting a task to mark as done
+    if "pending_done" in context.user_data:
+        page_ids = context.user_data.get("pending_done", [])
+        try:
+            num = int(text)
+            if 1 <= num <= len(page_ids):
+                page_id = page_ids[num - 1]
+                notion.pages.update(
+                    page_id=page_id,
+                    properties={"منجزة؟": {"checkbox": True}}
+                )
+                del context.user_data["pending_done"]
+                await update.message.reply_text("تم تعليم المهمة كمنجزة ✅")
+                return
+        except ValueError:
+            del context.user_data["pending_done"]
+
     try:
         data = analyze_text(text)
         saved = save_to_notion(data)
@@ -111,8 +199,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=keep_alive, daemon=True).start()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list", list_tasks))
+    app.add_handler(CommandHandler("done", done_task))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("Bot is running")
